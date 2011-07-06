@@ -11,46 +11,86 @@ options = Trollop::options do
 Print out relative filenames for changed files in a manner suitable for passing to other commands.
 Usage:
   $ git filename [options] [pattern1] ... [patternN]
-where each pattern is a ruby regular expression and [options] are
+where each pattern is a ruby regular expression and [options] are listed below. The default when none of
+["staged", "unstaged", "untracked", "renamed", "unmerged"] are specified is "--staged --unstaged"; that is,
+all changes to the index and the working directory, but not untracked files or merge conflicts.
 EOS
 
-  opt :staged, "Only matched filenames for staged changes", :default => false
-  opt :unstaged, "Only matched filenames for unstaged changes", :default => false
-  opt :untracked, "Only match untracked files", :default => false
-  opt :newlines, "Print each result on its own line (instead of just separated by spaces)", :default => false
+  opt :staged, "Match filenames for changes in the index", :default => false
+  opt :unstaged, "Match filenames for changes in the working tree but not in the index", :default => false
+  opt :untracked, "Match untracked files", :default => false
+  opt :renamed, "Match files that have been renamed in the index", :default => false
+  opt :deleted, "Match files that have been deleted in the index or the work tree", :default => false
+  opt :unmerged, "Match paths to merge conflicts", :default => false
+  opt :newlines, "Print each result on its own line (instead of just separated by spaces)", :default => false,
+      :short => "-n"
   opt :any, "Match any of the patterns (default is to match all patterns)", :default => false
 end
 
-STATUS_CODE_TO_STATUS = {
-  " " => :unmodified,
-  "M" => :modified,
-  "A" => :added,
-  "D" => :deleted,
-  "R" => :renamed,
-  "C" => :copied,
-  "U" => :updated_and_unmerged,
-  "?" => :untracked
-}
+chosen_options = [:staged, :unstaged, :untracked, :renamed, :deleted, :unmerged].select { |o| options[o] }
+chosen_options = [:staged, :unstaged] if chosen_options.empty? # Default
+patterns = ARGV.map { |p| Regexp.new p }
 
-# status_x and status_y should be statuses from the above map. See the "Short Format" section in the
-# git-status man page. before_path and after_path are the paths for this change (the same unless it is a
-# rename). merge_conflict indicates whether the ChangePath represents a merge conflict.
-ChangePath = Struct.new(:status_x, :status_y, :before_path, :after_path, :merge_conflict)
+# status is the status code; status_x and status_y are its components. See the "Short Format" section in the
+# git-status man page. path is the current path to the change (so if the file was renamed, the new name).
+ChangePath = Struct.new(:status, :status_x, :status_y, :path)
 
 raw_text = `git status --porcelain`
 change_paths = raw_text.split("\n").map do |line|
-  matches = line.match(/((^[ MADRCU])([ MADRCU])) (.*?)( -> (.*))?$/)
+  # This regex is confusing. Here are the labeled parts:
+  #   |<---- 2 --->||<--- 3 --->|  | 4 |     | 6|
+  # /((^[ MADRCU\?])([ MADRCU\?])) (.*?)( -> (.*))?$/
+  #  |<----------- 1 ----------->|      |5-unused|
+  #
+  # and here are examples:
+  #
+  # " M foo/bar":    | "RM foo/bar -> baz":
+  #   1 => " M"      |   1 => "RM"
+  #   2 => " "       |   2 => "R"
+  #   3 => "M"       |   3 => "M"
+  #   4 => "foo/bar" |   4 => "foo/bar"
+  #   6 => nil       |   6 => "baz"
+  matches = line.match(/((^[ MADRCU\?])([ MADRCU\?])) (.*?)( -> (.*))?$/)
   unless matches
     STDERR.puts "bad line: #{line}"
     next
   end
-  #merge_conflict =
-  status_x = STATUS_CODE_TO_STATUS[matches[2]]
-  status_y = STATUS_CODE_TO_STATUS[matches[3]]
-  before_path = matches[4]
-  after_path = matches[6] || matches[4]
-  merge_conflict = ["DD", "AU", "UD", "UA", "DU", "AA", "UU"].include? matches[1]
-  ChangePath.new status_x, status_y, before_path, after_path, merge_conflict
+  status = matches[1]
+  status_x = matches[2]
+  status_y = matches[3]
+  path = matches[6] || matches[4]
+  ChangePath.new status, status_x, status_y, path
 end
 
-change_paths.each { |x| p x }
+unmerged_changes = []
+non_merge_changes = []
+change_paths.each do |change|
+  if ["DD", "AU", "UD", "UA", "DU", "AA", "UU"].include? change.status
+    unmerged_changes << change
+  else
+    non_merge_changes << change
+  end
+end
+
+staged_changes = non_merge_changes.select { |change| change.status_x =~ /[MARDC]/ }
+unstaged_changes = non_merge_changes.select { |change| change.status_y =~ /[MD]/ }
+untracked_changes = non_merge_changes.select { |change| change.status_x == "?" }
+renamed_changes = non_merge_changes.select { |change| change.status_x == "R" }
+deleted_changes = non_merge_changes.select { |change| change.status =~ /D/ }
+
+paths = chosen_options.map { |option| eval("#{option}_changes") }.flatten.uniq.map(&:path).uniq
+# Make the paths relative to the CWD (git status --porcelain gives relative to repo root)
+cd_up = `git rev-parse --show-cdup`.strip
+paths.map! { |path| File.join(cd_up, path) }
+
+output_paths = paths.select do |path|
+  if options[:any]
+    patterns.any? { |pattern| pattern =~ path }
+  else
+    patterns.all? { |pattern| pattern =~ path }
+  end
+end
+
+separator = options[:newlines] ? "\n" : " "
+result = output_paths.map { |path| %Q{"#{path}"} }.join(separator)
+puts result
