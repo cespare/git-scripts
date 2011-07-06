@@ -1,0 +1,56 @@
+#!/usr/bin/env ruby
+
+begin
+  require "trollop"
+rescue LoadError
+  abort "You need the trollop gem to use git-filename: $ gem install trollop"
+end
+
+options = Trollop::options do
+  banner <<EOS
+Print out relative filenames for changed files in a manner suitable for passing to other commands.
+Usage:
+  $ git filename [options] [pattern1] ... [patternN]
+where each pattern is a ruby regular expression and [options] are
+EOS
+
+  opt :staged, "Only matched filenames for staged changes", :default => false
+  opt :unstaged, "Only matched filenames for unstaged changes", :default => false
+  opt :untracked, "Only match untracked files", :default => false
+  opt :newlines, "Print each result on its own line (instead of just separated by spaces)", :default => false
+  opt :any, "Match any of the patterns (default is to match all patterns)", :default => false
+end
+
+STATUS_CODE_TO_STATUS = {
+  " " => :unmodified,
+  "M" => :modified,
+  "A" => :added,
+  "D" => :deleted,
+  "R" => :renamed,
+  "C" => :copied,
+  "U" => :updated_and_unmerged,
+  "?" => :untracked
+}
+
+# status_x and status_y should be statuses from the above map. See the "Short Format" section in the
+# git-status man page. before_path and after_path are the paths for this change (the same unless it is a
+# rename). merge_conflict indicates whether the ChangePath represents a merge conflict.
+ChangePath = Struct.new(:status_x, :status_y, :before_path, :after_path, :merge_conflict)
+
+raw_text = `git status --porcelain`
+change_paths = raw_text.split("\n").map do |line|
+  matches = line.match(/((^[ MADRCU])([ MADRCU])) (.*?)( -> (.*))?$/)
+  unless matches
+    STDERR.puts "bad line: #{line}"
+    next
+  end
+  #merge_conflict =
+  status_x = STATUS_CODE_TO_STATUS[matches[2]]
+  status_y = STATUS_CODE_TO_STATUS[matches[3]]
+  before_path = matches[4]
+  after_path = matches[6] || matches[4]
+  merge_conflict = ["DD", "AU", "UD", "UA", "DU", "AA", "UU"].include? matches[1]
+  ChangePath.new status_x, status_y, before_path, after_path, merge_conflict
+end
+
+change_paths.each { |x| p x }

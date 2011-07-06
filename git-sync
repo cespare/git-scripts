@@ -2,11 +2,9 @@
 
 USAGE =<<EOS
 Usage:
-
   $ git sync <newbase> [branch]
 
 "git sync master topic" is shorthand for the following:
-
   $ git rebase master topic
   $ git checkout master
   $ git merge --ff-only topic
