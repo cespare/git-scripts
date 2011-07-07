@@ -79,12 +79,17 @@ renamed_changes = non_merge_changes.select { |change| change.status_x == "R" }
 deleted_changes = non_merge_changes.select { |change| change.status =~ /D/ }
 
 paths = chosen_options.map { |option| eval("#{option}_changes") }.flatten.uniq.map(&:path).uniq
+# git status --porcelain will try to quote filenames with spaces.
+paths.map! { |path| path =~ /^".*"$/ ? path[1..-2] : path }
 # Make the paths relative to the CWD (git status --porcelain gives relative to repo root)
 cd_up = `git rev-parse --show-cdup`.strip
-paths.map! { |path| File.join(cd_up, path) }
+paths.map! { |path| File.join(cd_up, path) } unless cd_up.empty?
 
 output_paths = paths.select do |path|
-  if options[:any]
+  # If there are no patterns, we want to match all paths even if --any is specified.
+  if patterns.empty?
+    true
+  elsif options[:any]
     patterns.any? { |pattern| pattern =~ path }
   else
     patterns.all? { |pattern| pattern =~ path }
@@ -92,5 +97,7 @@ output_paths = paths.select do |path|
 end
 
 separator = options[:newlines] ? "\n" : " "
-result = output_paths.map { |path| %Q{"#{path}"} }.join(separator)
-puts result
+puts output_paths.map { |path|
+  STDERR.puts "Warning: pattern matches paths with spaces. Approximating using '?'." if path.include? " "
+  path.gsub(" ", "?")
+}.join(separator)
