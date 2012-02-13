@@ -27,10 +27,28 @@ well in combination with other git commands, like `git add`, as well as with sys
     $ g reset HEAD `g f --any \.h$ ~$` # Unstage files ending in .h or ~
     $ vim `g f -m`                     # Open all merge conflicts in vim
 
+git-delete-submodule
+--------------------
+
+This command does a few things for you to blow away a submodule entirely, including deleting the files and
+deleting the git metadata. Run `git delete-submodule -h` for more information.
+
+git-rescue-branch
+-----------------
+
+This is a script which is used to fix branches that have been borked by doing a merge that is subsequently
+rebased (often with `pull --rebase`). In this situation, git will remove the merge commit and rebase all the
+merged commits onto the branch, which is not what the user generally means to do. `git-rescue-branch` uses
+`git cherry` to figure out which commits are actually new commits on the branch, and creates a new branch from
+the mainline containing only those commits.
+
 Installation
 ------------
 
-Just clone this repo somewhere and add it to your `$PATH`.
+Just clone this repo somewhere and add it to your `$PATH`. You'll need the following ruby gems installed:
+
+* trollop
+* colorize
 
 TODO
 ----

@@ -1,0 +1,117 @@
+#!/usr/bin/env ruby
+
+begin
+  require "colorize"
+rescue LoadError
+  abort "You need the colorize gem to use git-rescue-branch: $ gem install colorize"
+end
+
+USAGE =<<EOS
+Usage:
+  $ git rescue-branch <branch-to-rescue>
+
+This command is used for fixing a branch that has had a merge on it rebased. This situation most often occurs
+when you are working on a topic branch and merge the mainline branch (typically master) in; then `git pull
+--rebase`. The rebase deletes the merge and recreates the merged commits on the topci branch, which is almost
+never what you want.
+
+This script will create a new branch from the mainline branch and then cherry-pick onto it every commit from
+the bad branch that does not exist (judging by its changeset) on the mainline branch. It uses git-cherry to
+accomplish this task.
+
+Run git-rescue-branch from the mainline reference branch (usually master) and pass it the name of the bad
+branch that contains the rebased merges. It will create a new, cleaned-up branch for you. Afterwards, you can
+use the new branch if you want and abandon the old one, or you can `reset --hard` the old branch to the fixed
+branch and then `push -f` the branch. (This will require everyone working on the branch to `pull -f`, so it
+may not be desirable.)
+
+EOS
+
+SHA_REGEX = /[0-9a-z]{40}/
+
+def quit(message)
+  puts message.red
+  exit 1
+end
+
+quit USAGE unless (["-h", "--help"] & ARGV).empty?
+quit USAGE if ARGV.empty?
+
+current_branch = nil
+
+# TODO: Do the following without using git-branch (which is a porcelain command). It's a little annoying
+# because I'd need to look in refs/heads and also parse packed-refs
+branches = `git branch --no-color`.split("\n").map do |branch_line|
+  matches = branch_line.match /([\*| ]) (.*)$/
+  quit "Error parsing `git branch" unless matches && matches.size == 3
+  branch_name = matches[2]
+  current_branch = branch_name if matches[1] == "*"
+  branch_name
+end
+
+branch_to_rescue = ARGV[0]
+quit "No local branch '#{branch_to_rescue}`" unless branches.include? branch_to_rescue
+
+common_ancestor = `git merge-base #{current_branch} #{branch_to_rescue}`.strip
+unless common_ancestor =~ /^#{SHA_REGEX}$/
+  quit "Cannot locate a common ancestor between #{current_branch} and #{branch_to_rescue}."
+end
+
+cherry_lines = `git cherry #{current_branch} #{branch_to_rescue}`.split("\n").map(&:strip).compact
+if cherry_lines.size > 50
+  puts "There are #{cherry_lines.size} commits on #{branch_to_rescue} that are not on #{current_branch}."
+  print "Type 'yes' to continue: "
+  unless STDIN.gets.chomp == "yes"
+    puts "quiting."
+    exit
+  end
+end
+
+duplicated_commits = []
+good_commits = []
+
+cherry_lines.each do |line|
+  matches = line.match /^([\+|-]) (#{SHA_REGEX})$/
+  quit "Bad output from git-cherry." unless matches && matches.size == 3
+  matches[1] == "-" ? duplicated_commits << matches[2] : good_commits << matches[2]
+end
+
+if duplicated_commits.empty?
+  quit "It does not appear that any commits exist on #{branch_to_rescue} that are duplicates of commits " <<
+        "on #{current_branch}."
+elsif good_commits.empty?
+  quit "It does not appear that #{branch_to_rescue} has any new commits on it that aren't on " <<
+        "#{current_branch}."
+end
+
+rescued_branch_name = "#{branch_to_rescue}-fixed"
+if branches.include? rescued_branch_name
+  quit "Cannot make branch #{rescued_branch_name} -- branch already exists."
+end
+`git checkout -b #{rescued_branch_name}`
+
+good_commits.each do |commit|
+  puts "Cherry-picking: #{`git show --pretty="%h %an %s" -s #{commit}`}"
+  `git cherry-pick #{commit}`
+end
+`git checkout #{current_branch}`
+
+puts <<-EOM.green
+
+New branch #{rescued_branch_name} created.
+
+This branch contains all the commits from #{branch_to_rescue} that are not duplicate patches of commits in
+#{current_branch}.
+
+Next steps:
+
+You may wish to push #{rescued_branch_name} to your git server (possibly after renaming it) and continue work
+there and abandon #{branch_to_rescue}. Alaternatively, you can blow away #{branch_to_rescue} and replace it
+with #{rescued_branch_name} (this method is destructive and will require you to push -f and any collaborators
+to pull -f; don't use it unless you know what you are doing):
+
+$ git checkout #{branch_to_rescue}
+$ git reset --hard #{rescued_branch_name}
+$ git branch -d #{rescued_branch_name}
+$ git push -f
+EOM
