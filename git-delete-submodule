@@ -60,11 +60,20 @@ puts "Removing the appropriate section from .git/config..."
 `git config -f .git/config --remove-section submodule.#{submodule_path} 2> /dev/null`
 # Don't need to check this one -- it might not exist if you haven't run git submodule init yet.
 
+metadata_directory = `cd #{submodule_path} && git rev-parse --git-dir`.strip
+
 puts "Deleting the submodule from the git cache..."
 `git rm --cached #{submodule_path}`
 unless $?.to_i.zero?
-  abort "There was a running 'git rm --cached #{submodule_path}'. Aborting."
+  abort "There was an error running 'git rm --cached #{submodule_path}'. Aborting."
 end
+
+# Need to explicitly remove the metadata dir for 1.7.8+ compatibility
+puts "Removing the metadata directory..."
+unless File.directory? metadata_directory
+  abort "The submodule's metadata directory was reported to be #{metadata_directory}, but it does not exist."
+end
+`rm -rf #{metadata_directory}`
 
 FileUtils.rm_rf submodule_path
 
