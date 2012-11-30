@@ -61,6 +61,9 @@ puts "Removing the appropriate section from .git/config..."
 # Don't need to check this one -- it might not exist if you haven't run git submodule init yet.
 
 metadata_directory = `cd #{submodule_path} && git rev-parse --git-dir`.strip
+unless metadata_directory.start_with? "/"
+  metadata_directory = File.join(submodule_path, metadata_directory)
+end
 
 puts "Deleting the submodule from the git cache..."
 `git rm --cached #{submodule_path}`
@@ -73,7 +76,7 @@ puts "Removing the metadata directory..."
 unless File.directory? metadata_directory
   abort "The submodule's metadata directory was reported to be #{metadata_directory}, but it does not exist."
 end
-`rm -rf #{metadata_directory}`
+FileUtils.rm_rf metadata_directory
 
 FileUtils.rm_rf submodule_path
 
