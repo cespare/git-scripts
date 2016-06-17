@@ -1,3 +1,7 @@
+**NOTE: I neither use nor maintain this project anymore.**
+
+I use tools in https://github.com/cespare/githelpers now.
+
 git-scripts
 ===========
 
